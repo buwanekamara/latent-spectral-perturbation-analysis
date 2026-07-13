@@ -1,0 +1,12 @@
+# PyTorch Core (Adjust if you need a specific CUDA version index)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Transformer Models & Hub
+transformers>=4.30.0
+huggingface-hub>=0.16.0
+
+# Utilities & Data Processing
+Pillow>=9.0.0
+tqdm>=4.65.0
+numpy>=1.24.0

@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Large Model Weights & Checkpoints
+*.pth
+*.pt
+
+
+# Datasets and Archives
+*.tar.gz
+data/
+processed_data/
+Dataset Creation/
+
+# IDE / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
