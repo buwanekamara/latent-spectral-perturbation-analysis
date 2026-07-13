@@ -1,6 +1,6 @@
 # PyTorch Core (Adjust if you need a specific CUDA version index)
-torch>=2.0.0
-torchvision>=0.15.0
+# torch>=2.0.0
+# torchvision>=0.15.0
 
 # Transformer Models & Hub
 transformers>=4.30.0
