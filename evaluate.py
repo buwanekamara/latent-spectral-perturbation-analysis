@@ -4,7 +4,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import numpy as np
 
 # Import your model and dataset
-from models.classifier import LSPAGatedNetwork
+from models.classifier import LSPAAttentionGatedNetwork
 from utils.tensor_dataset import LatentTensorDataset
 
 def evaluate_model():
@@ -28,7 +28,7 @@ def evaluate_model():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # 2. Initialize the Model and Load Weights
-    classifier = LSPAGatedNetwork(num_layers=NUM_LAYERS).to(DEVICE)
+    classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS).to(DEVICE)
     
     try:
         classifier.load_state_dict(torch.load(MODEL_WEIGHTS_PATH, map_location=DEVICE))

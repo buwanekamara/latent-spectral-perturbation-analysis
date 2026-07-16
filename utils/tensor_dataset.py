@@ -23,7 +23,7 @@ class LatentTensorDataset(Dataset):
 
     def __getitem__(self, idx):
         # Load the pre-computed [4, 2048] tensor straight into memory
-        features = torch.load(self.file_paths[idx])
+        features = torch.load(self.file_paths[idx], weights_only=True)
         label = torch.tensor(self.labels[idx], dtype=torch.float32)
         
         # Zero-Cost Feature Regularization during training

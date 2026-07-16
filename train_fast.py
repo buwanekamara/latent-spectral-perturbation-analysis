@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from models.classifier import LSPAGatedNetwork
+from models.classifier import LSPAAttentionGatedNetwork
 from utils.tensor_dataset import LatentTensorDataset
 
 def train_fast_lspa():
@@ -25,7 +25,7 @@ def train_fast_lspa():
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     # 2. Load ONLY Module 3 (Trainable)
-    classifier = LSPAGatedNetwork(num_layers=NUM_LAYERS).to(DEVICE)
+    classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS).to(DEVICE)
     classifier.train()
 
     # 3. Optimization
