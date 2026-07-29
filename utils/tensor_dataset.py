@@ -3,11 +3,15 @@ import torch
 from torch.utils.data import Dataset
 
 class LatentTensorDataset(Dataset):
-    def __init__(self, processed_real_dir, processed_fake_dir, is_train=True, normalize=False):
+    def __init__(self, processed_real_dir, processed_fake_dir, is_train=True,
+                 normalize=False, delta_only=False):
         self.file_paths = []
         self.labels = []
         self.is_train = is_train
         self.normalize = normalize
+        # delta_only: drop the orig_cls (content) half, keep only the Delta
+        # signal -> feature becomes [4, 1024]. Tests FIRE's content-bias claim.
+        self.delta_only = delta_only
         
         for file_name in os.listdir(processed_real_dir):
             if file_name.endswith('.pt'):
@@ -51,8 +55,14 @@ class LatentTensorDataset(Dataset):
         features = torch.load(self.file_paths[idx], weights_only=True)
         label = torch.tensor(self.labels[idx], dtype=torch.float32)
 
+        # Normalize BEFORE slicing: the Delta half is divided by the orig_cls
+        # norm, so the content half must still be present at this point.
         if self.normalize:
             features = self.normalize_features(features)
+
+        if self.delta_only:
+            half = features.shape[-1] // 2
+            features = features[..., half:]          # [4, 1024] Delta only
 
         # Zero-Cost Feature Regularization during training
         if self.is_train:

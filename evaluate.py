@@ -10,6 +10,16 @@ from models.classifier import LSPAAttentionGatedNetwork
 from utils.tensor_dataset import LatentTensorDataset
 
 
+# ==================== CONFIG (edit these, then just Run) ====================
+CFG_DELTA_ONLY = False   # MUST match the mode the weights were trained with
+CFG_NORMALIZE  = False   # MUST match training
+# Weights auto-select by mode below; override with CFG_WEIGHTS if you want.
+CFG_WEIGHTS    = None     # None -> auto: deltaonly file if CFG_DELTA_ONLY else full file
+CFG_VAL_REAL   = "processed_data/val/real"
+CFG_VAL_FAKE   = "processed_data/val/fake"
+# ===========================================================================
+
+
 def group_key(path):
     """
     TTA support: crops of the same image are named  <imgid>_crop<k>.pt
@@ -51,31 +61,43 @@ def print_report(title, m):
 
 def evaluate_model():
     parser = argparse.ArgumentParser(description="LSPA evaluation with threshold sweep + TTA")
-    parser.add_argument("--real-dir", default="processed_data/val/real")
-    parser.add_argument("--fake-dir", default="processed_data/val/fake")
-    parser.add_argument("--weights", default="fast_lspa_classifier.pth")
+    # Defaults come from the CONFIG block above; CLI flags override if passed.
+    parser.add_argument("--real-dir", default=CFG_VAL_REAL)
+    parser.add_argument("--fake-dir", default=CFG_VAL_FAKE)
+    parser.add_argument("--weights", default=None)
     parser.add_argument("--threshold", type=float, default=None,
                         help="Optional extra manual threshold to report")
-    parser.add_argument("--normalize", action="store_true",
+    parser.add_argument("--normalize", action="store_true", default=CFG_NORMALIZE,
                         help="Enable relative-Delta feature normalization "
                              "(must match how the weights were trained)")
+    parser.add_argument("--delta-only", action="store_true", default=CFG_DELTA_ONLY,
+                        help="Use Delta half only [4,1024] (must match training)")
     args = parser.parse_args()
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 64
     NUM_LAYERS = 4
+    FEATURE_DIM = 1024 if args.delta_only else 2048
+    # Auto-select weights file to match the mode, unless one was given.
+    if args.weights is None:
+        args.weights = CFG_WEIGHTS or (
+            "fast_lspa_classifier_deltaonly.pth" if args.delta_only
+            else "fast_lspa_classifier.pth")
 
     print(f"--- Starting LSPA Evaluation on {DEVICE} ---")
     print(f"Weights: {args.weights} | Real: {args.real_dir} | Fake: {args.fake_dir}")
-    print(f"Feature normalization: {'ON' if args.normalize else 'OFF'}")
+    print(f"Mode: {'DELTA-ONLY [4,1024]' if args.delta_only else 'FULL [4,2048]'} "
+          f"| normalization: {'ON' if args.normalize else 'OFF'}")
 
     # 1. Dataset (order preserved: shuffle=False)
     val_dataset = LatentTensorDataset(args.real_dir, args.fake_dir,
-                                      is_train=False, normalize=args.normalize)
+                                      is_train=False, normalize=args.normalize,
+                                      delta_only=args.delta_only)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     # 2. Model
-    classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS).to(DEVICE)
+    classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS,
+                                           feature_dim=FEATURE_DIM).to(DEVICE)
     try:
         classifier.load_state_dict(torch.load(args.weights, map_location=DEVICE, weights_only=True))
         print("Model weights loaded successfully.")
