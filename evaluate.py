@@ -11,10 +11,11 @@ from utils.tensor_dataset import LatentTensorDataset
 
 
 # ==================== CONFIG (edit these, then just Run) ====================
-CFG_DELTA_ONLY = False   # MUST match the mode the weights were trained with
-CFG_NORMALIZE  = False   # MUST match training
+CFG_DELTA_ONLY        = False   # MUST match the mode the weights were trained with
+CFG_NORMALIZE         = True    # MUST match training
+CFG_DEEP_SUPERVISION  = True    # MUST match training (only affects which file is loaded)
 # Weights auto-select by mode below; override with CFG_WEIGHTS if you want.
-CFG_WEIGHTS    = None     # None -> auto: deltaonly file if CFG_DELTA_ONLY else full file
+CFG_WEIGHTS    = None     # None -> auto-named by the mode flags above
 CFG_VAL_REAL   = "processed_data/val/real"
 CFG_VAL_FAKE   = "processed_data/val/fake"
 # ===========================================================================
@@ -72,6 +73,8 @@ def evaluate_model():
                              "(must match how the weights were trained)")
     parser.add_argument("--delta-only", action="store_true", default=CFG_DELTA_ONLY,
                         help="Use Delta half only [4,1024] (must match training)")
+    parser.add_argument("--deep-supervision", action="store_true", default=CFG_DEEP_SUPERVISION,
+                        help="Load a deep-supervision-trained file (aux heads ignored at eval)")
     args = parser.parse_args()
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -80,9 +83,12 @@ def evaluate_model():
     FEATURE_DIM = 1024 if args.delta_only else 2048
     # Auto-select weights file to match the mode, unless one was given.
     if args.weights is None:
-        args.weights = CFG_WEIGHTS or (
-            "fast_lspa_classifier_deltaonly.pth" if args.delta_only
-            else "fast_lspa_classifier.pth")
+        name = "fast_lspa_classifier"
+        if args.delta_only:
+            name += "_deltaonly"
+        if args.deep_supervision:
+            name += "_ds"
+        args.weights = CFG_WEIGHTS or (name + ".pth")
 
     print(f"--- Starting LSPA Evaluation on {DEVICE} ---")
     print(f"Weights: {args.weights} | Real: {args.real_dir} | Fake: {args.fake_dir}")
@@ -99,8 +105,19 @@ def evaluate_model():
     classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS,
                                            feature_dim=FEATURE_DIM).to(DEVICE)
     try:
-        classifier.load_state_dict(torch.load(args.weights, map_location=DEVICE, weights_only=True))
-        print("Model weights loaded successfully.")
+        state = torch.load(args.weights, map_location=DEVICE, weights_only=True)
+        # strict=False: a deep-supervision file carries aux_heads.* keys that the
+        # eval model doesn't have (aux heads are training-only). Everything the
+        # eval model needs (projection/attention/classifier) still loads.
+        missing, unexpected = classifier.load_state_dict(state, strict=False)
+        aux_ignored = [k for k in unexpected if k.startswith("aux_heads")]
+        real_missing = [k for k in missing]
+        if real_missing:
+            print(f"WARNING: missing weights not found in file: {real_missing}")
+        if aux_ignored:
+            print(f"Model weights loaded (ignored {len(aux_ignored)} training-only aux-head tensors).")
+        else:
+            print("Model weights loaded successfully.")
     except FileNotFoundError:
         print(f"Error: Could not find '{args.weights}'.")
         return

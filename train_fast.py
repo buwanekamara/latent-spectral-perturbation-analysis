@@ -10,10 +10,12 @@ from utils.tensor_dataset import LatentTensorDataset
 
 
 # ==================== CONFIG (edit these, then just Run) ====================
-CFG_DELTA_ONLY = True   # True  -> train on Delta half only  [4, 1024]
-                         # False -> train on full feature      [4, 2048]
-CFG_NORMALIZE  = False   # True  -> relative-Delta normalization (divide by orig_cls norm)
-CFG_EPOCHS     = 15
+CFG_DELTA_ONLY        = False   # True -> train on Delta half only [4, 1024]
+                                # False-> train on full feature     [4, 2048]
+CFG_NORMALIZE         = True    # True -> relative-Delta normalization (divide by orig_cls norm)
+CFG_DEEP_SUPERVISION  = True    # True -> per-layer auxiliary heads + losses
+CFG_AUX_WEIGHT        = 0.3     # strength of the per-layer losses (lambda)
+CFG_EPOCHS            = 15
 # ===========================================================================
 
 
@@ -38,6 +40,10 @@ def train_fast_lspa():
     parser.add_argument("--normalize", action="store_true", default=CFG_NORMALIZE,
                         help="Relative-Delta normalization (divide by orig_cls norm)")
     parser.add_argument("--epochs", type=int, default=CFG_EPOCHS)
+    parser.add_argument("--deep-supervision", action="store_true", default=CFG_DEEP_SUPERVISION,
+                        help="Add per-layer auxiliary heads and losses")
+    parser.add_argument("--aux-weight", type=float, default=CFG_AUX_WEIGHT,
+                        help="Weight (lambda) on the per-layer losses")
     parser.add_argument("--out", default=None,
                         help="Output weights path (auto-named by mode if omitted)")
     args = parser.parse_args()
@@ -49,9 +55,13 @@ def train_fast_lspa():
     NUM_LAYERS = 4
     # Feature width follows the mode: Delta-only halves it to 1024.
     FEATURE_DIM = 1024 if args.delta_only else 2048
-    OUT_PATH = args.out or (
-        "fast_lspa_classifier_deltaonly.pth" if args.delta_only
-        else "fast_lspa_classifier.pth")
+    # Auto-name weights so different modes never overwrite each other.
+    name = "fast_lspa_classifier"
+    if args.delta_only:
+        name += "_deltaonly"
+    if args.deep_supervision:
+        name += "_ds"
+    OUT_PATH = args.out or (name + ".pth")
 
     # Paths pointing to our pre-computed tensors
     PROCESSED_REAL_DIR = "processed_data/train/real"
@@ -60,6 +70,7 @@ def train_fast_lspa():
     print(f"--- Starting Ultra-Fast LSPA Training on {DEVICE} ---")
     print(f"Mode: {'DELTA-ONLY [4,1024]' if args.delta_only else 'FULL [4,2048]'} "
           f"| normalize={args.normalize} | feature_dim={FEATURE_DIM}")
+    print(f"Deep supervision: {args.deep_supervision} (lambda={args.aux_weight})")
     print(f"Weights will be saved to: {OUT_PATH}")
 
     # 1. Load the pre-extracted tensors
@@ -70,7 +81,8 @@ def train_fast_lspa():
 
     # 2. Load ONLY Module 3 (Trainable)
     classifier = LSPAAttentionGatedNetwork(num_layers=NUM_LAYERS,
-                                           feature_dim=FEATURE_DIM).to(DEVICE)
+                                           feature_dim=FEATURE_DIM,
+                                           deep_supervision=args.deep_supervision).to(DEVICE)
     classifier.train()
 
     # 3. Optimization (focal loss replaces plain BCE - see focal_bce_loss)
@@ -88,10 +100,18 @@ def train_fast_lspa():
 
             optimizer.zero_grad()
 
-            # Forward pass directly into the MLP!
-            preds = classifier(features)
+            if args.deep_supervision:
+                # main = fused prediction, aux = per-layer predictions [B, L]
+                preds, aux = classifier(features, return_aux=True)
+                main_loss = focal_bce_loss(preds, labels)
+                # Grade every layer against the same label (broadcast over layers)
+                aux_targets = labels.unsqueeze(1).expand_as(aux)
+                aux_loss = focal_bce_loss(aux, aux_targets)
+                loss = main_loss + args.aux_weight * aux_loss
+            else:
+                preds = classifier(features)
+                loss = focal_bce_loss(preds, labels)
 
-            loss = focal_bce_loss(preds, labels)
             loss.backward()
             optimizer.step()
 

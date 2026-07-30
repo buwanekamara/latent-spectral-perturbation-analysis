@@ -32,19 +32,22 @@ import torch
 import torch.nn as nn
 
 class LSPAAttentionGatedNetwork(nn.Module):
-    def __init__(self, num_layers=4, feature_dim=2048, hidden_dim=512):
+    def __init__(self, num_layers=4, feature_dim=2048, hidden_dim=512,
+                 deep_supervision=False):
         super(LSPAAttentionGatedNetwork, self).__init__()
-        
+        self.num_layers = num_layers
+        self.deep_supervision = deep_supervision
+
         # Project each 2048-dim layer down to a manageable space
         self.layer_projection = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(p=0.3)
         )
-        
+
         # Multi-Head Attention layer to look across the 4 layers
         self.multihead_attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=4, batch_first=True)
-        
+
         # Final classification head
         self.classifier = nn.Sequential(
             nn.Linear(num_layers * hidden_dim, 128),
@@ -53,19 +56,39 @@ class LSPAAttentionGatedNetwork(nn.Module):
             nn.Linear(128, 1),
             nn.Sigmoid()
         )
-        
-    def forward(self, x):
-        # Input shape expected: [batch_size, 4, 2048]
+
+        # Deep supervision: one tiny per-layer detector. Training scaffolding
+        # only - each forces its layer to be individually competent. Unused at
+        # inference (the fused head is the final answer).
+        if deep_supervision:
+            self.aux_heads = nn.ModuleList(
+                [nn.Linear(hidden_dim, 1) for _ in range(num_layers)]
+            )
+
+    def forward(self, x, return_aux=False):
+        # Input shape expected: [batch_size, num_layers, feature_dim]
         batch_size, num_layers, feat_dim = x.shape
-        
+
         # Step 1: Project layers individually -> [batch_size, 4, 512]
         projected = torch.stack([self.layer_projection(x[:, i, :]) for i in range(num_layers)], dim=1)
-        
+
         # Step 2: Pass through Self-Attention -> [batch_size, 4, 512]
         attn_output, _ = self.multihead_attention(projected, projected, projected)
-        
+
         # Step 3: Flatten the cross-attentive features -> [batch_size, 4 * 512]
         flattened = attn_output.reshape(batch_size, -1)
-        
-        # Step 4: Classify
-        return self.classifier(flattened).squeeze(-1)
+
+        # Step 4: Classify (main fused prediction)
+        main = self.classifier(flattened).squeeze(-1)
+
+        # Optional per-layer predictions from the PRE-attention features, so each
+        # head sees only its own layer (attention would otherwise mix them).
+        if return_aux and self.deep_supervision:
+            aux = torch.stack(
+                [torch.sigmoid(self.aux_heads[i](projected[:, i, :])).squeeze(-1)
+                 for i in range(num_layers)],
+                dim=1,
+            )  # [batch_size, num_layers]
+            return main, aux
+
+        return main
