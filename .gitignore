@@ -19,6 +19,9 @@ __pycache__/
 data/
 processed_data/
 Dataset Creation/
+Evaluation data set/
+processed_eval/
+thesis_figures/
 
 # IDE / OS files
 .DS_Store
@@ -26,3 +29,12 @@ Thumbs.db
 .vscode/
 .idea/
 .pdf
+
+zotero_mcp_setup.bat
+zotero_mcp_setup.py
+*.png
+*.csv
+*.pdf
+
+LSPA_Viva_Presentation.pptx
+fire_extract.txt

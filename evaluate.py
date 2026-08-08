@@ -18,6 +18,9 @@ CFG_DEEP_SUPERVISION  = True    # MUST match training (only affects which file i
 CFG_WEIGHTS    = None     # None -> auto-named by the mode flags above
 CFG_VAL_REAL   = "processed_data/val/real"
 CFG_VAL_FAKE   = "processed_data/val/fake"
+CFG_CALIBRATE  = True     # True -> also report leakage-free calibrated accuracy
+CFG_CALIB_FRAC = 0.5      # fraction of the set used to PICK the threshold
+CFG_CALIB_RUNS = 20       # repeated random splits, results averaged
 # ===========================================================================
 
 
@@ -48,6 +51,59 @@ def compute_metrics(labels, probs, threshold):
     }
 
 
+def youden_threshold(labels, probs):
+    """Best-balanced threshold (max TPR-FPR) on the GIVEN data."""
+    fpr, tpr, thr = roc_curve(labels, probs)
+    finite = np.isfinite(thr)
+    fpr, tpr, thr = fpr[finite], tpr[finite], thr[finite]
+    return float(thr[int(np.argmax(tpr - fpr))])
+
+
+def stratified_split(labels, test_frac, rng):
+    """Split indices keeping the real/fake ratio in both halves."""
+    calib_idx, test_idx = [], []
+    for cls in (0, 1):
+        idx = np.where(labels == cls)[0]
+        rng.shuffle(idx)
+        cut = int(len(idx) * test_frac)
+        test_idx.append(idx[:cut])
+        calib_idx.append(idx[cut:])
+    return np.concatenate(calib_idx), np.concatenate(test_idx)
+
+
+def calibrated_report(labels, probs, runs, test_frac):
+    """
+    Leakage-free accuracy: pick the threshold on a CALIBRATION half, then
+    measure on the untouched TEST half. Repeat over many random splits and
+    average, so the reported number does not depend on one lucky split and
+    was never tuned on the data it is measured on.
+    """
+    accs, precs, recs, f1s = [], [], [], []
+    for seed in range(runs):
+        rng = np.random.RandomState(seed)
+        calib_idx, test_idx = stratified_split(labels, test_frac, rng)
+        thr = youden_threshold(labels[calib_idx], probs[calib_idx])   # chosen on calib
+        m = compute_metrics(labels[test_idx], probs[test_idx], thr)   # measured on test
+        accs.append(m["accuracy"]); precs.append(m["precision"])
+        recs.append(m["recall"]);   f1s.append(m["f1"])
+
+    def ms(a):
+        a = np.array(a) * 100
+        return a.mean(), a.std()
+
+    print("\n==========================================")
+    print("   CALIBRATED (LEAKAGE-FREE) METRICS      ")
+    print(f"   threshold picked on {int((1-test_frac)*100)}% held-out, "
+          f"measured on the other {int(test_frac*100)}%, {runs} splits")
+    print("==========================================")
+    for name, vals in [("Accuracy", accs), ("Precision", precs),
+                       ("Recall", recs), ("F1-Score", f1s)]:
+        mean, std = ms(vals)
+        print(f"{name:10s}: {mean:.2f}% +/- {std:.2f}")
+    print("==========================================")
+    print("Report these numbers (with AUC) - the threshold never saw the test data.\n")
+
+
 def print_report(title, m):
     print(f"\n--- {title} (threshold = {m['threshold']:.4f}) ---")
     print(f"Accuracy:  {m['accuracy'] * 100:.2f}%")
@@ -75,6 +131,8 @@ def evaluate_model():
                         help="Use Delta half only [4,1024] (must match training)")
     parser.add_argument("--deep-supervision", action="store_true", default=CFG_DEEP_SUPERVISION,
                         help="Load a deep-supervision-trained file (aux heads ignored at eval)")
+    parser.add_argument("--no-calibrate", action="store_true", default=not CFG_CALIBRATE,
+                        help="Skip the leakage-free calibrated report")
     args = parser.parse_args()
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -195,12 +253,17 @@ def evaluate_model():
     print(f"Score stats  | Real: mean {probs[labels == 1].mean():.3f}"
           f" | Fake: mean {probs[labels == 0].mean():.3f}")
 
+    print("\n--- Thresholds picked on THIS set (informational, NOT for thesis: leaky) ---")
     print_report("Default", compute_metrics(labels, probs, 0.5))
     print_report("Youden's J optimal", compute_metrics(labels, probs, youden_thr))
     print_report("EER operating point", compute_metrics(labels, probs, eer_thr))
     if args.threshold is not None:
         print_report("Manual", compute_metrics(labels, probs, args.threshold))
-    print("==========================================\n")
+    print("==========================================")
+
+    # Leakage-free calibrated accuracy (the number to actually report)
+    if not args.no_calibrate:
+        calibrated_report(labels, probs, runs=CFG_CALIB_RUNS, test_frac=CFG_CALIB_FRAC)
 
 
 if __name__ == "__main__":
